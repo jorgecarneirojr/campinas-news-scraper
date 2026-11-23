@@ -175,6 +175,46 @@ class ArticleRepository:
         await self._session.flush()
         return UpsertOutcome(article_id=existing.id, created=False, updated=True)
 
+    async def rematch_all(self, *, day: date | None = None) -> int:
+        """Recalcula `article_keywords` para matérias já coletadas.
+
+        Necessário quando o catálogo de palavras-chave muda (ex.: keywords
+        `kind='site'` criadas depois da coleta). Devolve quantas matérias
+        ganharam ao menos um vínculo.
+        """
+        stmt = select(Article.id, Article.title, Article.summary)
+        if day is not None:
+            stmt = stmt.where(Article.local_day == day)
+        rows = (await self._session.execute(stmt)).all()
+        if not rows:
+            return 0
+
+        keywords = (
+            await self._session.execute(
+                text("SELECT id, term FROM public.keywords WHERE active AND kind = 'site'")
+            )
+        ).all()
+        if not keywords:
+            return 0
+
+        normalized = [(kid, _norm_kw(term)) for kid, term in keywords]
+        touched = 0
+        for article_id, title, summary in rows:
+            blob = _norm_kw(f"{title or ''} {summary or ''}")
+            hits = [kid for kid, needle in normalized if _kw_hit(blob, needle)]
+            if not hits:
+                continue
+            await self._session.execute(
+                pg_insert(ArticleKeyword)
+                .values([{"article_id": article_id, "keyword_id": kid} for kid in hits])
+                .on_conflict_do_nothing(
+                    index_elements=[ArticleKeyword.article_id, ArticleKeyword.keyword_id]
+                )
+            )
+            touched += 1
+        await self._session.flush()
+        return touched
+
     async def match_keywords(self, article_id: int, article: ScrapedArticle) -> int:
         """Casa a matéria contra `public.keywords` (kind='site') e grava os vínculos.
 

@@ -169,6 +169,34 @@ def sources() -> None:
 
 
 @app.command()
+def rematch(
+    day: Annotated[
+        str | None,
+        typer.Option("--day", "-d", help="Dia local (YYYY-MM-DD). Padrão: todos."),
+    ] = None,
+) -> None:
+    """Recalcula o casamento de palavras-chave das matérias já coletadas.
+
+    Use depois de criar/alterar keywords `kind='site'` no painel, para que
+    as matérias existentes passem a ser entregues pelo notify_worker.
+    """
+    settings = _bootstrap()
+    target = _parse_day(day, settings) if day else None
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+
+    async def _main() -> int:
+        try:
+            async with session_scope(factory) as session:
+                return await ArticleRepository(session).rematch_all(day=target)
+        finally:
+            await engine.dispose()
+
+    touched = asyncio.run(_main())
+    console.print(f"[green]rematch concluído[/green] matérias com vínculo: {touched}")
+
+
+@app.command()
 def stats(
     day: Annotated[
         str | None, typer.Option("--day", "-d", help="Dia local (YYYY-MM-DD). Padrão: hoje.")
