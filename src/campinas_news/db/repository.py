@@ -3,10 +3,17 @@
 O upsert é feito com ``INSERT ... ON CONFLICT DO UPDATE`` do PostgreSQL,
 o que torna a coleta idempotente e segura sob concorrência (vários workers
 podem rodar em paralelo sem duplicar matérias).
+
+Integração com o `clipping-tv`: as matérias web são casadas contra
+``public.keywords WHERE kind='site'`` e gravadas em ``sites.article_keywords``,
+o mesmo contrato de ``public.block_keywords``. Assim o `notify_worker` do
+clipping-tv entrega matérias de portal sem nenhuma mudança de lógica.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -17,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from campinas_news.db.models import (
     Article,
+    ArticleKeyword,
     ArticleRevision,
     ScrapeRun,
     ScrapeRunItem,
@@ -24,6 +32,22 @@ from campinas_news.db.models import (
     SourceHealth,
 )
 from campinas_news.scraping.models import ScrapedArticle, SourceDefinition
+
+
+def _norm_kw(value: str) -> str:
+    """Normaliza texto para casamento de palavra-chave (igual ao clipping-tv)."""
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^0-9a-z ]", " ", stripped)).strip()
+
+
+def _kw_hit(hay_norm: str, needle_norm: str) -> bool:
+    """Casa a palavra-chave como palavra/frase inteira (não substring)."""
+    if not hay_norm or not needle_norm:
+        return False
+    return (
+        re.search(r"(?<![0-9a-z])" + re.escape(needle_norm) + r"(?![0-9a-z])", hay_norm) is not None
+    )
 
 
 @dataclass(slots=True)
@@ -150,6 +174,35 @@ class ArticleRepository:
         )
         await self._session.flush()
         return UpsertOutcome(article_id=existing.id, created=False, updated=True)
+
+    async def match_keywords(self, article_id: int, article: ScrapedArticle) -> int:
+        """Casa a matéria contra `public.keywords` (kind='site') e grava os vínculos.
+
+        Usa o MESMO algoritmo do clipping-tv (`_norm_kw` + `_kw_hit`): palavra
+        inteira, sem substring, sem acento. Devolve quantos termos casaram.
+        """
+        rows = await self._session.execute(
+            text("SELECT id, term FROM public.keywords " "WHERE active AND kind = 'site'")
+        )
+        keywords = rows.all()
+        if not keywords:
+            return 0
+
+        blob = _norm_kw(f"{article.title} {article.summary or ''}")
+        hits = [keyword_id for keyword_id, term in keywords if _kw_hit(blob, _norm_kw(term))]
+        if not hits:
+            return 0
+
+        stmt = (
+            pg_insert(ArticleKeyword)
+            .values([{"article_id": article_id, "keyword_id": kid} for kid in hits])
+            .on_conflict_do_nothing(
+                index_elements=[ArticleKeyword.article_id, ArticleKeyword.keyword_id]
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+        return len(hits)
 
     async def known_url_hashes(self, source_slug: str, day: date) -> set[str]:
         """Hashes já coletados para a fonte no dia local (evita re-download)."""

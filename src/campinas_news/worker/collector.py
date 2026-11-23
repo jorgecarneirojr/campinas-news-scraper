@@ -98,6 +98,10 @@ class Collector:
                         result.updated += 1
                     else:
                         result.skipped += 1
+                    # Casa contra public.keywords (kind='site') para o
+                    # notify_worker do clipping-tv entregar a matéria.
+                    if outcome.created or outcome.updated:
+                        await articles_repo.match_keywords(outcome.article_id, article)
 
                 await RunRepository(session).record_source_health(
                     slug, ok=True, error=None, at=now_utc()

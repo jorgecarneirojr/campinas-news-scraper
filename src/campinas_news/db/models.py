@@ -26,6 +26,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    MetaData,
     String,
     Text,
     UniqueConstraint,
@@ -34,11 +35,15 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+# Schema PostgreSQL onde o acervo de portais vive. Quando integrado ao
+# `clipping-tv`, é `sites` (o acervo TV/Rádio fica em `public`).
+SCHEMA = "sites"
+
 
 class Base(DeclarativeBase):
-    """Base declarativa com convenção de nomes estável para constraints."""
+    """Base declarativa com schema fixo (`sites`)."""
 
-    metadata = None  # type: ignore[assignment]
+    metadata = MetaData(schema=SCHEMA)
 
 
 class TimestampMixin:
@@ -196,6 +201,32 @@ class ScrapeRunItem(Base):
     error: Mapped[str | None] = mapped_column(Text)
 
     run: Mapped[ScrapeRun] = relationship(back_populates="items")
+
+
+class ArticleKeyword(Base):
+    """Associação matéria web ↔ palavra-chave (espelho de `public.block_keywords`).
+
+    Permite que o `notify_worker` do clipping-tv encontre matérias de portais
+    sem nenhuma mudança de lógica: ele já consulta `block_keywords` para TV/Rádio.
+    """
+
+    __tablename__ = "article_keywords"
+    __table_args__ = (
+        UniqueConstraint("article_id", "keyword_id", name="uq_article_keyword"),
+        Index("ix_article_keywords_article", "article_id"),
+        Index("ix_article_keywords_kw", "keyword_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    article_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sites.articles.id", ondelete="CASCADE"), nullable=False
+    )
+    keyword_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("public.keywords.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class SourceHealth(Base, TimestampMixin):
