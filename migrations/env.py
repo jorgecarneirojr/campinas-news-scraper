@@ -11,7 +11,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -37,6 +37,14 @@ def _database_url() -> str:
     )
 
 
+# O scraper compartilha o banco com o clipping-tv, que já usa a tabela
+# `alembic_version` para as próprias migrações (0001..0018). Usar a mesma
+# tabela faria os dois projetos sobrescreverem a versão um do outro.
+# Por isso o scraper mantém a sua em `sites.alembic_version`.
+VERSION_TABLE = "alembic_version"
+VERSION_TABLE_SCHEMA = "sites"
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
@@ -44,6 +52,9 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        version_table=VERSION_TABLE,
+        version_table_schema=VERSION_TABLE_SCHEMA,
+        include_schemas=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -52,10 +63,16 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     engine = create_engine(_database_url(), poolclass=pool.NullPool)
     with engine.connect() as connection:
+        # O schema precisa existir antes do Alembic criar a tabela de versão.
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {VERSION_TABLE_SCHEMA}"))
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            version_table=VERSION_TABLE,
+            version_table_schema=VERSION_TABLE_SCHEMA,
+            include_schemas=True,
         )
         with context.begin_transaction():
             context.run_migrations()
