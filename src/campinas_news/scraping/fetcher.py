@@ -7,6 +7,10 @@ Responsabilidades:
 * Rate-limit cooperativo por host (delay aleatório entre requisições).
 * Cache em memória por execução: a mesma URL não é baixada duas vezes.
 * Respeito a ``Retry-After``.
+* **Fallback por proxy**: quando um host responde 403 (bloqueio por IP),
+  tenta novamente através de um proxy do ProxyScrape. O pool é por host e
+  só é construído quando o bloqueio acontece — os demais portais seguem
+  direto, sem custo.
 """
 
 from __future__ import annotations
@@ -27,10 +31,13 @@ from tenacity import (
 
 from campinas_news.core.config import Settings
 from campinas_news.core.logging import get_logger
+from campinas_news.scraping.proxy import ProxyRegistry
 
 log = get_logger(__name__)
 
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 522, 524})
+# 403/451 = bloqueio por IP/região: candidato a proxy, não a retry direto.
+BLOCKED_STATUS = frozenset({403, 451})
 
 
 class FetchError(RuntimeError):
@@ -72,6 +79,9 @@ class Fetcher:
         self._host_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._last_request_at: dict[str, float] = {}
         self._cache: dict[str, str] = {}
+        # Pool de proxies por host bloqueado (construído sob demanda).
+        self._proxies = ProxyRegistry(settings.scraper_user_agent)
+        self._blocked_hosts: set[str] = set()
 
     # -- ciclo de vida ------------------------------------------------------
     async def __aenter__(self) -> Fetcher:
@@ -141,7 +151,27 @@ class Fetcher:
         raise FetchError(url, "estado inesperado")  # pragma: no cover
 
     async def _single_request(self, url: str) -> str:
+        host = httpx.URL(url).host
+
+        # Host já conhecido como bloqueado: vai direto pelo proxy.
+        if host in self._blocked_hosts:
+            proxied = await self._request_via_proxy(url, host)
+            if proxied is not None:
+                return proxied
+            # Sem proxy disponível: tenta direto (pode ter sido desbloqueado).
+            log.warning("proxy_unavailable_fallback_direct", host=host)
+
         response = await self._client.get(url)
+
+        # 403/451 = bloqueio por IP. Tenta pelo pool de proxies.
+        if response.status_code in BLOCKED_STATUS:
+            log.warning("host_blocked_trying_proxy", host=host, status=response.status_code)
+            proxied = await self._request_via_proxy(url, host)
+            if proxied is not None:
+                self._blocked_hosts.add(host)
+                return proxied
+            raise FetchError(url, "bloqueado e sem proxy disponível", response.status_code)
+
         if response.status_code in RETRYABLE_STATUS:
             retry_after = response.headers.get("Retry-After")
             delay: float | None = None
@@ -160,3 +190,47 @@ class Fetcher:
 
         response.encoding = response.encoding or "utf-8"
         return response.text
+
+    async def _request_via_proxy(self, url: str, host: str) -> str | None:
+        """Tenta a URL através de proxies do pool. Devolve o corpo ou ``None``.
+
+        Tenta até ``PROXY_ATTEMPTS`` proxies distintos; cada falha remove o
+        proxy do pool para não ser reutilizado na mesma execução.
+        """
+        pool = self._proxies.pool_for(host, probe_url=url)
+        attempts = 4
+
+        for attempt in range(1, attempts + 1):
+            proxy = await pool.get()
+            if proxy is None:
+                log.warning("proxy_pool_exhausted", host=host, attempt=attempt)
+                return None
+
+            try:
+                async with httpx.AsyncClient(
+                    proxy=f"http://{proxy}",
+                    timeout=httpx.Timeout(self._settings.scraper_timeout),
+                    follow_redirects=True,
+                    headers={
+                        "User-Agent": self._settings.scraper_user_agent,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                    },
+                ) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        resp.encoding = resp.encoding or "utf-8"
+                        log.info("proxy_success", host=host, proxy=proxy, attempt=attempt)
+                        return resp.text
+                    log.warning(
+                        "proxy_bad_status",
+                        host=host,
+                        proxy=proxy,
+                        status=resp.status_code,
+                    )
+                    pool.invalidate(proxy)
+            except Exception as exc:
+                log.warning("proxy_failed", host=host, proxy=proxy, error=str(exc))
+                pool.invalidate(proxy)
+
+        return None
