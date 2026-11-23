@@ -26,7 +26,14 @@ def create_engine(settings: Settings) -> AsyncEngine:
         pool_recycle=1800,
         connect_args={
             "timeout": 10,
-            "server_settings": {"application_name": "campinas-news-scraper"},
+            "server_settings": {
+                "application_name": "campinas-news-scraper",
+                # O acervo de portais vive em `sites`, mas o scraper também
+                # lê `public.keywords` (catálogo compartilhado com o
+                # clipping-tv). Sem `public` no search_path, a query de
+                # casamento de palavras-chave falha com UndefinedTable.
+                "search_path": "sites,public",
+            },
         },
     )
 
