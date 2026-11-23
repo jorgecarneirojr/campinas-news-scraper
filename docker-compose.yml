@@ -1,0 +1,62 @@
+name: campinas-news
+
+x-app-env: &app-env
+  env_file:
+    - .env
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: campinas-news-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-campinas_news}
+      POSTGRES_USER: ${POSTGRES_USER:-campinas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      TZ: ${APP_TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # exponha apenas em loopback; remova em produção
+      - "127.0.0.1:${POSTGRES_PUBLISHED_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-campinas} -d ${POSTGRES_DB:-campinas_news}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: campinas-news-scraper:latest
+    container_name: campinas-news-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    <<: *app-env
+    command: ["worker"]
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+    name: campinas-news-pgdata

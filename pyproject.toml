@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "campinas-news-scraper"
+version = "0.1.0"
+description = "Coleta diária e estruturada de notícias dos portais de Campinas/SP"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Jorge Luis Carneiro Junior", email = "jorgeluis.unesp@gmail.com" }]
+
+dependencies = [
+  "httpx[http2]>=0.27,<0.29",
+  "selectolax>=0.3.21",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.3,<3",
+  "sqlalchemy[asyncio]>=2.0.30,<2.1",
+  "asyncpg>=0.29,<0.31",
+  # Driver síncrono exigido pelo Alembic (migrations/env.py)
+  "psycopg[binary]>=3.1,<4",
+  "alembic>=1.13,<2",
+  "tenacity>=8.3,<10",
+  "structlog>=24.1,<26",
+  "typer>=0.12,<0.16",
+  "rich>=13.7,<14",
+  "python-dateutil>=2.9,<3",
+  "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-asyncio>=0.23,<1",
+  "pytest-cov>=5,<7",
+  "ruff>=0.5,<0.9",
+  "mypy>=1.10,<2",
+  "respx>=0.21,<0.23",
+]
+
+[project.scripts]
+campinas-news = "campinas_news.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/campinas_news"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:campinas_news.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "S", "DTZ", "PT"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "S311", "DTZ001", "DTZ005"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["selectolax.*", "dateutil.*"]
+ignore_missing_imports = true
