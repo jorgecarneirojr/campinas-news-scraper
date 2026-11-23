@@ -99,34 +99,54 @@ Para mudar, edite o `.env` e `docker compose up -d --force-recreate worker`.
 
 ---
 
-## 5. Portais com bloqueio (403)
+## 5. Portais bloqueados — resolvido com proxy automático
 
-| Portal | Status | Motivo |
+| Portal | Status | Observação |
 |---|---|---|
-| G1 Campinas | ✅ ok | — |
-| A Cidade On | ✅ ok | — |
-| Sampi Campinas | ✅ ok | — |
-| Diário Campineiro | ✅ ok | — |
-| **Hora Campinas** | ❌ 403 | bloqueia o IP da VPS (até a home) |
-| **CBN Campinas** | ❌ 403 | bloqueia o IP da VPS (até a home) |
+| G1 Campinas | ✅ ok | direto |
+| A Cidade On | ✅ ok | direto |
+| Sampi Campinas | ✅ ok | direto |
+| Diário Campineiro | ✅ ok | direto |
+| Hora Campinas | ✅ ok | **via proxy** (bloqueia o IP da VPS) |
+| CBN Campinas | ✅ ok | **via proxy** (bloqueia o IP da VPS) |
 
-Ambos retornam 403 inclusive na home page, com User-Agent de navegador
-completo — é bloqueio por IP/ASN, não por header.
+Hora Campinas e CBN retornam **403 inclusive na home page**, com User-Agent
+de navegador completo — é bloqueio por IP/ASN, não por header. Retry direto
+não resolve.
 
-**Soluções possíveis:**
+### Como funciona o fallback
 
-1. **Proxy residencial/brasileiro** — preencher `SCRAPER_PROXY_URL` no `.env`
-   do scraper e recriar o worker:
+Implementado em [`scraping/proxy.py`](../src/campinas_news/scraping/proxy.py:1)
+e integrado ao [`Fetcher`](../src/campinas_news/scraping/fetcher.py:1):
+
+1. Requisição direta. Se vier **403/451**, o host é marcado como bloqueado.
+2. Baixa a lista pública do **ProxyScrape** (sem API key).
+3. Testa os candidatos em paralelo contra o **próprio feed alvo** — exige
+   HTTP 200 e corpo com `<rss`/`<feed`/`<?xml`.
+4. Usa até 4 proxies distintos; cada falha remove o proxy do pool.
+5. O pool tem TTL de 30 min e é reconstruído quando esvazia.
+6. Hosts não bloqueados **não pagam custo nenhum** — o pool só é construído
+   quando o 403 acontece.
+
+Sem proxy disponível, cai para conexão direta (best-effort) e a coleta segue
+em modo `partial` — nunca falha por causa do proxy.
+
+### Custo observado
+
+Os dois portais via proxy levam mais tempo (CBN ~5 min, Hora ~6,5 min) porque
+proxies gratuitos são lentos e instáveis. Os outros quatro seguem rápidos.
+A coleta completa leva ~6,5 min.
+
+### Alternativas (se o proxy gratuito incomodar)
+
+1. **Proxy residencial pago** — preencher `SCRAPER_PROXY_URL` no `.env`:
    ```env
    SCRAPER_PROXY_URL=http://user:pass@host:port
    ```
+   Quando definido, o `Fetcher` usa esse proxy para **todas** as requisições.
 2. **Rodar o scraper em outra máquina** (IP não bloqueado) apontando para o
-   mesmo banco via `POSTGRES_HOST=<ip-da-vps>` + liberar a porta 5432 no
-   firewall apenas para esse IP.
+   mesmo banco via `POSTGRES_HOST=<ip-da-vps>`.
 3. **Contatar os portais** para liberar o IP da agência.
-
-Enquanto isso, a coleta roda em modo `partial` (4 de 6 fontes) — o sistema
-não falha, apenas registra a falha em `sites.source_health`.
 
 ---
 
