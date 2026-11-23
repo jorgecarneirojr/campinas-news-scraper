@@ -10,13 +10,16 @@ from datetime import date
 import pytest
 
 from campinas_news.core.config import Settings
+from campinas_news.scraping.feed import parse_feed
 from campinas_news.scraping.fetcher import Fetcher
 from campinas_news.scraping.spiders.acidadeon import ACidadeOnSpider
+from campinas_news.scraping.spiders.brasil_campinas import BrasilCampinasSpider
 from campinas_news.scraping.spiders.cbn_campinas import CbnCampinasSpider
 from campinas_news.scraping.spiders.diario_campineiro import DiarioCampineiroSpider
 from campinas_news.scraping.spiders.g1 import G1CampinasSpider
 from campinas_news.scraping.spiders.hora_campinas import HoraCampinasSpider
 from campinas_news.scraping.spiders.sampi import SampiCampinasSpider
+from campinas_news.scraping.spiders.thmais import ThmaisCampinasSpider
 
 DAY = date(2026, 11, 23)
 
@@ -148,3 +151,75 @@ async def test_article_from_other_day_is_rejected(settings: Settings, fixture_lo
     spider = _spider(CbnCampinasSpider, settings, {url: fixture_loader("cbn_article.html")})
     article = await spider.parse_article(url, day=date(2026, 1, 1))
     assert article is None
+
+
+# --- TH+ Mais -------------------------------------------------------------
+
+THMAIS_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Campinas terá câmeras para multar uso de celular</title>
+    <link>https://thmais.com.br/campinas/campinas-tera-cameras-para-multar-uso-de-celular/</link>
+    <pubDate>Mon, 23 Nov 2026 17:48:15 +0000</pubDate>
+  </item>
+  <item>
+    <title>Criança sofre fratura em João Pessoa</title>
+    <link>https://thmais.com.br/cidades/joao-pessoa/crianca-sofre-fratura/</link>
+    <pubDate>Mon, 23 Nov 2026 17:40:00 +0000</pubDate>
+  </item>
+  <item>
+    <title>Outra de Campinas</title>
+    <link>https://thmais.com.br/campinas/outra-materia-de-campinas/</link>
+    <pubDate>Mon, 23 Nov 2026 16:00:00 +0000</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_thmais_filters_only_campinas(settings: Settings) -> None:
+    """O feed global mistura praças; só Campinas deve passar."""
+    spider = ThmaisCampinasSpider(settings, _StubFetcher(settings, {}))
+    entries = parse_feed(THMAIS_FEED)
+    assert len(entries) == 3
+
+    filtered = spider.filter_entries(entries)
+    assert len(filtered) == 2
+    assert all("/campinas/" in e.url for e in filtered)
+    assert not any("joao-pessoa" in e.url for e in filtered)
+
+
+@pytest.mark.asyncio
+async def test_thmais_extracts_article(settings: Settings, fixture_loader) -> None:
+    url = "https://thmais.com.br/campinas/campinas-tera-cameras/"
+    spider = _spider(ThmaisCampinasSpider, settings, {url: fixture_loader("thmais_article.html")})
+    article = await spider.parse_article(url, day=DAY)
+
+    assert article is not None
+    assert article.source_slug == "thmais-campinas"
+    assert article.body_text is not None
+    assert "câmera" in article.body_text.lower()
+    assert article.published_at is not None
+
+
+# --- Brasil Campinas ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_brasil_campinas_extracts_article(settings: Settings, fixture_loader) -> None:
+    url = "https://brasilcampinas.com.br/carreta-de-mamografias/"
+    spider = _spider(
+        BrasilCampinasSpider, settings, {url: fixture_loader("brasil_campinas_article.html")}
+    )
+    article = await spider.parse_article(url, day=date(2022, 12, 2))
+
+    assert article is not None
+    assert article.source_slug == "brasil-campinas"
+    assert article.body_text is not None
+    assert "mamografia" in article.body_text.lower()
+
+
+def test_brasil_campinas_definition(settings: Settings) -> None:
+    """Registrado no registry, mas o site está parado desde 2022."""
+    spider = BrasilCampinasSpider(settings, _StubFetcher(settings, {}))
+    assert spider.definition.feed_url == "https://brasilcampinas.com.br/feed/"
+    assert spider.definition.strategy == "rss"

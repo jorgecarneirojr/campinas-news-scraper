@@ -69,12 +69,19 @@ class BaseSpider(abc.ABC):
         self.fetcher = fetcher
 
     # -- descoberta ---------------------------------------------------------
+    def filter_entries(self, entries: list[FeedEntry]) -> list[FeedEntry]:
+        """Hook para filtrar itens do feed (ex.: só a praça de Campinas).
+
+        A implementação padrão não filtra nada.
+        """
+        return entries
+
     async def discover(self, day: date) -> list[FeedEntry | ListingEntry]:
         """Descobre candidatos de matérias para o dia local informado."""
         definition = self.definition
         if definition.strategy == "rss" and definition.feed_url:
             xml_text = await self.fetcher.get_text(definition.feed_url)
-            entries = parse_feed(xml_text)
+            entries = self.filter_entries(parse_feed(xml_text))
             log.debug(
                 "feed_parsed",
                 site=definition.slug,

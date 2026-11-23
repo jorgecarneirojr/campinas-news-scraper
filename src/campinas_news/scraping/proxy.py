@@ -36,9 +36,24 @@ PROXYSCRAPE_URL = (
     "?request=display_proxies&protocol=http&proxy_format=ipport"
     "&format=text&timeout=5000"
 )
+# Lista restrita ao Brasil. Portais atrás de Cloudflare (TH+ Mais) só liberam
+# IPs residenciais/ISP brasileiros — proxies de datacenter são bloqueados.
+PROXYSCRAPE_URL_BR = (
+    "https://api.proxyscrape.com/v4/free-proxy-list/get"
+    "?request=display_proxies&country=br&protocol=http&proxy_format=ipport"
+    "&format=text&timeout=10000"
+)
 
 # Corpo mínimo que indica que a resposta é um feed válido (não página de bloqueio)
 _FEED_MARKERS = (b"<rss", b"<feed", b"<?xml")
+# Marcadores da página de bloqueio do Cloudflare. Um proxy que devolve isso
+# com HTTP 200 NÃO serve — precisa ser descartado.
+_BLOCK_MARKERS = (
+    b"you have been blocked",
+    b"attention required",
+    b"cf-error-details",
+    b"enable javascript and cookies",
+)
 
 
 @dataclass(slots=True)
@@ -52,6 +67,9 @@ class ProxyPool:
     concurrency: int = 60
     timeout: float = 12.0
     user_agent: str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    # Quando True, usa a lista restrita ao Brasil. Necessário para portais
+    # atrás de Cloudflare (TH+ Mais), que só liberam IPs residenciais BR.
+    prefer_brazil: bool = False
 
     _valid: list[str] = field(default_factory=list)
     _built_at: float = 0.0
@@ -94,9 +112,10 @@ class ProxyPool:
         )
 
     async def _fetch_candidates(self) -> list[str]:
+        url = PROXYSCRAPE_URL_BR if self.prefer_brazil else PROXYSCRAPE_URL
         try:
             async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                resp = await client.get(PROXYSCRAPE_URL)
+                resp = await client.get(url)
                 resp.raise_for_status()
                 lines = [ln.strip() for ln in resp.text.splitlines() if ln.strip()]
         except Exception as exc:
@@ -128,15 +147,21 @@ class ProxyPool:
                 follow_redirects=True,
                 headers={
                     "User-Agent": self.user_agent,
-                    "Accept": "application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "pt-BR,pt;q=0.9",
                 },
             ) as client:
                 resp = await client.get(self.probe_url)
                 if resp.status_code != 200:
                     return False
-                head = resp.content[:4000]
-                return any(marker in head for marker in _FEED_MARKERS)
+                head = resp.content[:8000].lower()
+                # Página de bloqueio do Cloudflare pode vir com HTTP 200.
+                if any(marker in head for marker in _BLOCK_MARKERS):
+                    return False
+                # Aceita feed OU página HTML real (o probe pode ser a home).
+                if any(marker in head for marker in _FEED_MARKERS):
+                    return True
+                return b"<html" in head and len(resp.content) > 20000
         except Exception:
             return False
 
@@ -144,8 +169,10 @@ class ProxyPool:
 class ProxyRegistry:
     """Mantém um ``ProxyPool`` por host bloqueado."""
 
-    def __init__(self, user_agent: str) -> None:
+    def __init__(self, user_agent: str, *, prefer_brazil_hosts: set[str] | None = None) -> None:
         self._user_agent = user_agent
+        # Hosts que exigem IP brasileiro (Cloudflare com geo-bloqueio).
+        self._prefer_brazil = prefer_brazil_hosts or set()
         self._pools: dict[str, ProxyPool] = {}
 
     def pool_for(self, host: str, probe_url: str) -> ProxyPool:
@@ -155,6 +182,7 @@ class ProxyRegistry:
                 host=host,
                 probe_url=probe_url,
                 user_agent=self._user_agent,
+                prefer_brazil=host in self._prefer_brazil,
             )
             self._pools[host] = pool
         return pool

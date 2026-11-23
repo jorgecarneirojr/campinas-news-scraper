@@ -38,6 +38,18 @@ log = get_logger(__name__)
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 522, 524})
 # 403/451 = bloqueio por IP/região: candidato a proxy, não a retry direto.
 BLOCKED_STATUS = frozenset({403, 451})
+# Cloudflare pode devolver 200 com a página de bloqueio no corpo.
+_BLOCK_PAGE_MARKERS = (
+    b"you have been blocked",
+    b"attention required",
+    b"cf-error-details",
+)
+
+
+def _looks_blocked(content: bytes) -> bool:
+    """Detecta a página de bloqueio do Cloudflare servida com HTTP 200."""
+    head = content[:8000].lower()
+    return any(marker in head for marker in _BLOCK_PAGE_MARKERS)
 
 
 class FetchError(RuntimeError):
@@ -80,7 +92,11 @@ class Fetcher:
         self._last_request_at: dict[str, float] = {}
         self._cache: dict[str, str] = {}
         # Pool de proxies por host bloqueado (construído sob demanda).
-        self._proxies = ProxyRegistry(settings.scraper_user_agent)
+        # Hosts atrás de Cloudflare com geo-bloqueio exigem IP brasileiro.
+        self._proxies = ProxyRegistry(
+            settings.scraper_user_agent,
+            prefer_brazil_hosts=set(settings.scraper_brazil_proxy_hosts),
+        )
         self._blocked_hosts: set[str] = set()
 
     # -- ciclo de vida ------------------------------------------------------
@@ -171,6 +187,15 @@ class Fetcher:
                 self._blocked_hosts.add(host)
                 return proxied
             raise FetchError(url, "bloqueado e sem proxy disponível", response.status_code)
+
+        # Cloudflare às vezes devolve HTTP 200 com a página de bloqueio.
+        if response.status_code == 200 and _looks_blocked(response.content):
+            log.warning("host_blocked_page_200", host=host)
+            proxied = await self._request_via_proxy(url, host)
+            if proxied is not None:
+                self._blocked_hosts.add(host)
+                return proxied
+            raise FetchError(url, "página de bloqueio (HTTP 200) e sem proxy disponível")
 
         if response.status_code in RETRYABLE_STATUS:
             retry_after = response.headers.get("Retry-After")

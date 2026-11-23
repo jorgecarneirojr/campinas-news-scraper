@@ -11,11 +11,13 @@ from campinas_news.scraping.base import BaseSpider
 from campinas_news.scraping.fetcher import Fetcher
 from campinas_news.scraping.models import SourceDefinition
 from campinas_news.scraping.spiders.acidadeon import ACidadeOnSpider
+from campinas_news.scraping.spiders.brasil_campinas import BrasilCampinasSpider
 from campinas_news.scraping.spiders.cbn_campinas import CbnCampinasSpider
 from campinas_news.scraping.spiders.diario_campineiro import DiarioCampineiroSpider
 from campinas_news.scraping.spiders.g1 import G1CampinasSpider
 from campinas_news.scraping.spiders.hora_campinas import HoraCampinasSpider
 from campinas_news.scraping.spiders.sampi import SampiCampinasSpider
+from campinas_news.scraping.spiders.thmais import ThmaisCampinasSpider
 
 SPIDER_CLASSES: tuple[type[BaseSpider], ...] = (
     G1CampinasSpider,
@@ -24,6 +26,8 @@ SPIDER_CLASSES: tuple[type[BaseSpider], ...] = (
     SampiCampinasSpider,
     CbnCampinasSpider,
     DiarioCampineiroSpider,
+    ThmaisCampinasSpider,
+    BrasilCampinasSpider,
 )
 
 SPIDERS_BY_SLUG: dict[str, type[BaseSpider]] = {cls.definition.slug: cls for cls in SPIDER_CLASSES}

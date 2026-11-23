@@ -56,6 +56,11 @@ class Settings(BaseSettings):
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
     scraper_proxy_url: str = ""
+    # Hosts que exigem IP brasileiro (Cloudflare com geo-bloqueio).
+    # Separados por vírgula, ex.: "thmais.com.br"
+    scraper_brazil_proxy_hosts_raw: str = Field(
+        default="thmais.com.br", alias="SCRAPER_BRAZIL_PROXY_HOSTS"
+    )
 
     # --- Agendamento -------------------------------------------------------
     schedule_daily_at: str = "06:30"
@@ -94,6 +99,15 @@ class Settings(BaseSettings):
         match = _TIME_RE.match(self.schedule_daily_at)
         assert match is not None  # garantido pelo validador
         return int(match.group("h")), int(match.group("m"))
+
+    @property
+    def scraper_brazil_proxy_hosts(self) -> tuple[str, ...]:
+        """Hosts que exigem proxy com IP brasileiro."""
+        return tuple(
+            host.strip().lower()
+            for host in self.scraper_brazil_proxy_hosts_raw.split(",")
+            if host.strip()
+        )
 
     @property
     def enabled_sites(self) -> tuple[str, ...]:
