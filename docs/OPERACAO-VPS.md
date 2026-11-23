@@ -109,6 +109,8 @@ Para mudar, edite o `.env` e `docker compose up -d --force-recreate worker`.
 | Diário Campineiro | ✅ ok | direto |
 | Hora Campinas | ✅ ok | **via proxy** (bloqueia o IP da VPS) |
 | CBN Campinas | ✅ ok | **via proxy** (bloqueia o IP da VPS) |
+| TH+ Mais Campinas | ✅ ok | **via proxy BR** (Cloudflare com geo-bloqueio) |
+| Rádio Brasil Campinas | ⚠️ 0 matérias | site parado desde 02/12/2022 |
 
 Hora Campinas e CBN retornam **403 inclusive na home page**, com User-Agent
 de navegador completo — é bloqueio por IP/ASN, não por header. Retry direto
@@ -119,17 +121,46 @@ não resolve.
 Implementado em [`scraping/proxy.py`](../src/campinas_news/scraping/proxy.py:1)
 e integrado ao [`Fetcher`](../src/campinas_news/scraping/fetcher.py:1):
 
-1. Requisição direta. Se vier **403/451**, o host é marcado como bloqueado.
-2. Baixa a lista pública do **ProxyScrape** (sem API key).
+1. Requisição direta. Se vier **403/451** — ou **HTTP 200 com a página de
+   bloqueio do Cloudflare** no corpo — o host é marcado como bloqueado.
+2. Baixa a lista pública do **ProxyScrape** (sem API key). Para hosts em
+   `SCRAPER_BRAZIL_PROXY_HOSTS`, usa a lista restrita ao Brasil
+   (`country=br`), porque o Cloudflare só libera IPs residenciais BR.
 3. Testa os candidatos em paralelo contra o **próprio feed alvo** — exige
-   HTTP 200 e corpo com `<rss`/`<feed`/`<?xml`.
-4. Usa até 4 proxies distintos; cada falha remove o proxy do pool.
+   HTTP 200, corpo sem marcadores de bloqueio (`you have been blocked`,
+   `attention required`, `cf-error-details`) e conteúdo real (feed ou HTML
+   > 20 KB).
+4. Usa até **8 proxies distintos** (proxies gratuitos têm ~30% de sucesso no
+   uso real); cada falha remove o proxy do pool. Timeout de 15 s por proxy.
 5. O pool tem TTL de 30 min e é reconstruído quando esvazia.
 6. Hosts não bloqueados **não pagam custo nenhum** — o pool só é construído
-   quando o 403 acontece.
+   quando o bloqueio acontece.
 
 Sem proxy disponível, cai para conexão direta (best-effort) e a coleta segue
 em modo `partial` — nunca falha por causa do proxy.
+
+### TH+ Mais — caso especial
+
+O `thmais.com.br` está atrás de Cloudflare com **bloqueio por IP** (403 em
+todas as URLs, inclusive na home). Playwright/CDP **não resolvem**: não há
+desafio JS, é bloqueio puro de IP. A solução é sair por um IP brasileiro.
+
+Configuração no `.env`:
+
+```env
+SCRAPER_BRAZIL_PROXY_HOSTS=thmais.com.br
+```
+
+O feed específico `/campinas/feed/` existe mas vem **vazio**; o spider usa o
+feed global `/feed/` e filtra por `/campinas/` na URL (hook
+`filter_entries` na `BaseSpider`).
+
+### Rádio Brasil Campinas — site inativo
+
+`brasilcampinas.com.br` está **sem publicações desde 02/12/2022**
+(confirmado pelo feed RSS e pela WP REST API). A coleta funciona e retorna
+`status: ok`, mas o filtro de "dia atual" descarta tudo — o resultado é
+sempre 0 matérias. Mantido no registry para o caso de o portal ser reativado.
 
 ### Custo observado
 
