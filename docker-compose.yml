@@ -1,41 +1,17 @@
 name: campinas-news
 
+# O scraper NÃO sobe Postgres próprio: ele usa o banco do clipping-tv
+# (schema `sites`). O host vem do .env (POSTGRES_HOST) e a rede externa
+# `clipping-tv_default` é anexada para o DNS resolver o container do banco.
+#
+# Para rodar isolado (dev), use `docker-compose.standalone.yml`, que adiciona
+# um Postgres local e não depende da rede do clipping-tv.
+
 x-app-env: &app-env
   env_file:
     - .env
-  environment:
-    POSTGRES_HOST: postgres
-    POSTGRES_PORT: "5432"
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: campinas-news-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-campinas_news}
-      POSTGRES_USER: ${POSTGRES_USER:-campinas}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
-      POSTGRES_INITDB_ARGS: "--data-checksums"
-      TZ: ${APP_TIMEZONE:-America/Sao_Paulo}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
-    ports:
-      # exponha apenas em loopback; remova em produção
-      - "127.0.0.1:${POSTGRES_PUBLISHED_PORT:-55432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-campinas} -d ${POSTGRES_DB:-campinas_news}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   worker:
     build:
       context: .
@@ -43,9 +19,6 @@ services:
     image: campinas-news-scraper:latest
     container_name: campinas-news-worker
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     <<: *app-env
     command: ["worker"]
     stop_grace_period: 30s
@@ -57,6 +30,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-volumes:
-  pgdata:
-    name: campinas-news-pgdata
+networks:
+  default:
+    name: ${SCRAPER_NETWORK:-clipping-tv_default}
+    external: true
