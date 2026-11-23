@@ -223,7 +223,9 @@ class Fetcher:
         proxy do pool para não ser reutilizado na mesma execução.
         """
         pool = self._proxies.pool_for(host, probe_url=url)
-        attempts = 4
+        # Proxies gratuitos falham muito: 8 tentativas distintas cobrem a
+        # taxa de sucesso observada (~30% dos validados).
+        attempts = 8
 
         for attempt in range(1, attempts + 1):
             proxy = await pool.get()
@@ -234,7 +236,7 @@ class Fetcher:
             try:
                 async with httpx.AsyncClient(
                     proxy=f"http://{proxy}",
-                    timeout=httpx.Timeout(self._settings.scraper_timeout),
+                    timeout=httpx.Timeout(pool.use_timeout),
                     follow_redirects=True,
                     headers={
                         "User-Agent": self._settings.scraper_user_agent,

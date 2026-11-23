@@ -70,6 +70,8 @@ class ProxyPool:
     # Quando True, usa a lista restrita ao Brasil. Necessário para portais
     # atrás de Cloudflare (TH+ Mais), que só liberam IPs residenciais BR.
     prefer_brazil: bool = False
+    # Timeout menor no uso real (proxy lento é descartado rápido).
+    use_timeout: float = 15.0
 
     _valid: list[str] = field(default_factory=list)
     _built_at: float = 0.0
