@@ -1,7 +1,12 @@
-"""CBN Campinas 99,1 FM (WordPress).
+"""CBN Campinas 99,1 FM (WordPress + Elementor).
 
 Feed: ``https://cbncampinas.com.br/feed/`` (≈24 itens).
-Corpo em ``.entry-content``; autor em ``dc:creator`` do feed.
+Autor em ``dc:creator`` do feed.
+
+O site migrou para o Elementor: as classes classicas do WordPress
+(``.entry-content``, ``.post-content``) NAO existem mais no HTML. O corpo da
+materia fica no widget ``theme-post-content`` do Elementor. Mantemos os
+seletores antigos como fallback caso o tema seja revertido.
 """
 
 from __future__ import annotations
@@ -22,6 +27,10 @@ class CbnCampinasSpider(BaseSpider):
     )
 
     body_selectors: ClassVar[tuple[str, ...]] = (
+        # Elementor (layout atual)
+        ".elementor-widget-theme-post-content",
+        "[data-widget_type='theme-post-content.default']",
+        # fallback: tema WordPress classico
         ".entry-content",
         "article .post-content",
         ".single-post-content",
